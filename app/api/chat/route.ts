@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { generateResponse, generateResponseStream, ChatMessage } from '@/lib/deepseek'
-import { searchPinecone } from '@/lib/pinecone'
+import { getGroundedContext } from '@/lib/pinecone'
 import { supabase, initializeDatabase } from '@/lib/supabase'
 import { chatConcurrentLimiter, getClientIP } from '@/lib/rate-limit'
 import { z } from 'zod'
@@ -93,17 +93,80 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Retrieve grounded context from the Pinecone knowledge base.
+    // Responses are generated ONLY from this context (strict RAG grounding).
     let context = ''
+    let sources: string[] = []
     try {
-      const searchResults = await searchPinecone(userMessage, 5)
-      if (searchResults && Array.isArray(searchResults)) {
-        context = searchResults
-          .map((result: any) => result.payload?.text || '')
-          .filter(Boolean)
-          .join('\n\n')
-      }
+      const grounded = await getGroundedContext(userMessage, 5)
+      context = grounded.context
+      sources = grounded.sources
     } catch (error) {
       console.error('Pinecone search failed:', error)
+    }
+
+    // If the knowledge base has no relevant data, refuse instead of hallucinating.
+    const NO_KB_FOUND_MESSAGE =
+      "I couldn't find anything about that in the information I have access to. " +
+      "My answers only come from the data stored in my knowledge base (currently the " +
+      "Botswana Data Protection Act). Could you try rephrasing, or ask me something " +
+      "about the Data Protection Act? 😊\n\n" +
+      "💡 Want to explore?\n" +
+      "• What are my rights as a data subject?\n" +
+      "• What does the Act say about data security?\n" +
+      "• What are the penalties for non-compliance?"
+
+    if (!context || context.trim().length === 0) {
+      if (sessionId) {
+        try {
+          await ensureDb()
+          await supabase.from('chat_sessions').upsert({
+            session_id: sessionId,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'session_id' }).select().single()
+
+          await supabase.from('chat_messages').insert({
+            session_id: sessionId,
+            role: 'user',
+            content: userMessage
+          })
+
+          await supabase.from('chat_messages').insert({
+            session_id: sessionId,
+            role: 'assistant',
+            content: NO_KB_FOUND_MESSAGE
+          })
+        } catch (error) {
+          console.error('Failed to store no-KB exchange:', error)
+        }
+      }
+
+      chatConcurrentLimiter.release(acquireKey)
+
+      if (wantsStream) {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ content: NO_KB_FOUND_MESSAGE })}\n\n`)
+            )
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+            controller.close()
+          }
+        })
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        })
+      }
+
+      return new Response(
+        JSON.stringify({ response: NO_KB_FOUND_MESSAGE, sources: [], grounded: false }),
+        { headers: { 'Content-Type': 'application/json' } }
+      )
     }
 
     if (sessionId) {
@@ -215,7 +278,12 @@ export async function POST(request: NextRequest) {
     }
 
     chatConcurrentLimiter.release(acquireKey)
-    return new Response(JSON.stringify({ response, context: context ? context.substring(0, 500) : null }), {
+    return new Response(JSON.stringify({
+      response,
+      grounded: true,
+      sources,
+      context: context ? context.substring(0, 500) : null
+    }), {
       headers: { 'Content-Type': 'application/json' }
     })
   } catch (error) {

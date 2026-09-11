@@ -161,3 +161,62 @@ export async function searchPinecone(query: string, limit: number = 5) {
     return []
   }
 }
+
+/**
+ * Grounded context built from Pinecone search results.
+ *
+ * `context` is the combined text of the matched chunks. `sources`, `bestScore`
+ * and `matchCount` let callers decide whether the knowledge base actually
+ * contains a relevant answer (e.g. refuse when there are zero matches).
+ */
+export interface GroundedContext {
+  context: string
+  sources: string[]
+  bestScore: number
+  matchCount: number
+  raw: any[]
+}
+
+export async function getGroundedContext(
+  query: string,
+  limit: number = 5
+): Promise<GroundedContext> {
+  const results = await searchPinecone(query, limit)
+
+  const usable = (results || []).filter(
+    (r: any) =>
+      r &&
+      r.payload &&
+      typeof r.payload.text === 'string' &&
+      r.payload.text.trim().length > 0
+  )
+
+  const bestScore = usable.reduce(
+    (max: number, r: any) =>
+      typeof r.score === 'number' && r.score > max ? r.score : max,
+    -Infinity
+  )
+
+  const sources = Array.from(
+    new Set(
+      usable
+        .map((r: any) => r.payload?.title)
+        .filter((t: any) => typeof t === 'string' && t.length > 0)
+    )
+  ) as string[]
+
+  const context = usable
+    .map((r: any) => {
+      const title = r.payload?.title ? `Source: ${r.payload.title}\n` : ''
+      return `${title}${r.payload.text}`
+    })
+    .join('\n\n---\n\n')
+
+  return {
+    context,
+    sources,
+    bestScore: Number.isFinite(bestScore) ? bestScore : 0,
+    matchCount: usable.length,
+    raw: usable,
+  }
+}
