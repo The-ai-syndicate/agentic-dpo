@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Copy, ThumbsUp, ThumbsDown, Search, Focus, Grid3x3, Globe, Cpu, Paperclip, Mic, Sparkles, ArrowRight, MessageCircle, Lightbulb, Bot, Plus, Trash2 } from 'lucide-react'
+import { AppMenu } from './app-menu'
 
 // Use browser's crypto.randomUUID() instead of uuid package to avoid Webpack issues
 const uuidv4 = () => {
@@ -384,9 +385,19 @@ export function ChatInterface() {
 
   return (
     <div className="flex flex-col h-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white min-h-0">
-      {/* Subtle top spacer */}
-      <div className="border-b border-white/5 bg-white/[0.02] shrink-0">
-        <div className="max-w-4xl mx-auto w-full px-2 md:px-6 py-1 md:py-2"></div>
+      <div className="border-b border-white/5 bg-white/[0.02] backdrop-blur-sm shrink-0">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-3 py-2.5 md:px-6 md:py-3">
+          <AppMenu />
+          <div className="flex flex-1 items-center justify-center gap-2">
+            <span className="text-base font-bold tracking-tight text-white md:text-lg">
+              Agentic DPO
+            </span>
+            <span className="rounded-full bg-teal-600 px-2 py-0.5 text-[10px] font-semibold text-white md:text-xs">
+              pro
+            </span>
+          </div>
+          <div className="w-9 md:w-10" />
+        </div>
       </div>
 
       {/* Messages Container */}

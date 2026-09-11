@@ -1,23 +1,46 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { initializeDatabase, supabase } from '@/lib/supabase'
+import { getClientIP } from '@/lib/rate-limit'
 
-export async function GET() {
+const SETUP_ALLOWED_IPS = (process.env.SETUP_ALLOWED_IPS || '').split(',').map(s => s.trim()).filter(Boolean)
+const SETUP_TOKEN = process.env.SETUP_API_TOKEN || ''
+
+export async function GET(request: NextRequest) {
+  const ip = getClientIP(request)
+
+  if (SETUP_ALLOWED_IPS.length > 0 && !SETUP_ALLOWED_IPS.includes(ip)) {
+    return NextResponse.json(
+      { error: 'Access denied', message: 'Setup endpoint is restricted.' },
+      { status: 403 }
+    )
+  }
+
+  if (SETUP_TOKEN) {
+    const provided =
+      request.headers.get('x-setup-token') ||
+      request.nextUrl.searchParams.get('token')
+    if (provided !== SETUP_TOKEN) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      )
+    }
+  }
+
   const results: { step: string; status: string; message?: string }[] = []
 
-  // Step 1: Check environment
   results.push({
     step: 'Environment Check',
     status: supabase ? '✅ OK' : '❌ FAIL',
     message: 'Supabase client initialized'
   })
 
-  // Step 2: Try to query existing tables
   try {
     const { data: sessionsCheck } = await supabase
       .from('chat_sessions')
       .select('id')
       .limit(1)
-    
+
     results.push({
       step: 'chat_sessions table',
       status: '✅ Exists',
@@ -30,10 +53,8 @@ export async function GET() {
       message: 'Table does not exist. Running initialization...'
     })
 
-    // Step 3: Initialize tables
     await initializeDatabase()
-    
-    // Step 4: Verify again
+
     try {
       await supabase.from('chat_sessions').select('id').limit(1)
       results.push({
@@ -45,18 +66,17 @@ export async function GET() {
       results.push({
         step: 'Initialization',
         status: '❌ Failed',
-        message: 'Could not create tables. Run supabase/migrations/001_create_chat_tables.sql manually in the Supabase SQL Editor.'
+        message: 'Could not create tables. Run supabase/migrations/001_create_chat_tables.sql manually.'
       })
     }
   }
 
-  // Step 5: Try to query chat_messages
   try {
     const { data: messagesCheck } = await supabase
       .from('chat_messages')
       .select('id')
       .limit(1)
-    
+
     results.push({
       step: 'chat_messages table',
       status: '✅ Exists',
@@ -70,7 +90,6 @@ export async function GET() {
     })
   }
 
-  // Step 6: Quick insert test
   if (results.some(r => r.status.includes('✅ Exists'))) {
     try {
       const testId = `test-${Date.now()}`
@@ -84,7 +103,6 @@ export async function GET() {
         content: 'Test message'
       })
 
-      // Clean up
       await supabase.from('chat_messages').delete().eq('session_id', testId)
       await supabase.from('chat_sessions').delete().eq('session_id', testId)
 
@@ -103,11 +121,11 @@ export async function GET() {
   }
 
   const allOk = results.every(r => r.status.includes('✅'))
-  
+
   return NextResponse.json({
     status: allOk ? '✅ All systems operational' : '⚠️ Some checks failed',
     timestamp: new Date().toISOString(),
     checks: results,
-    manual_fix: !allOk ? 'Run the SQL in supabase/migrations/001_create_chat_tables.sql in the Supabase SQL Editor.' : undefined
+    manual_fix: !allOk ? 'Run the SQL in supabase/migrations/001_create_chat_tables.sql.' : undefined
   })
 }

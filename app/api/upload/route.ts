@@ -2,17 +2,29 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createRequire } from 'module'
 import { generateSimpleEmbedding } from '@/lib/embeddings'
 import { upsertToPinecone } from '@/lib/pinecone'
+import { uploadConcurrentLimiter, getClientIP } from '@/lib/rate-limit'
+import { z } from 'zod'
 
 const require = createRequire(import.meta.url)
 
-/**
- * Extract text from a PDF buffer using pdf-parse
- */
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+const MAX_TEXT_LENGTH = 500000
+const ALLOWED_EXTENSIONS = [
+  'pdf', 'txt', 'md', 'csv', 'json', 'html', 'xml', 'yaml', 'yml', 'log',
+  'docx', 'doc', 'rtf', 'odt',
+]
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const UploadMetaSchema = z.object({
+  title: z.string().max(500).optional(),
+  source: z.string().max(200).optional(),
+  category: z.string().max(200).optional(),
+  text: z.string().max(MAX_TEXT_LENGTH).optional(),
+})
+
 async function extractPDFText(buffer: Buffer): Promise<string> {
   console.log(`extractPDFText: starting extraction for buffer of size ${buffer.length}`)
   try {
-    // Attempt to load pdf-parse.
-    // We try multiple common entry points to handle different environment/bundler behaviors.
     let pdf;
     const searchPaths = [
       'pdf-parse',
@@ -37,45 +49,31 @@ async function extractPDFText(buffer: Buffer): Promise<string> {
       throw new Error('Could not load pdf-parse from any known path.')
     }
 
-    console.log('extractPDFText: pdf-parse loaded. Type:', typeof pdf)
-
     let text = ''
 
-    // The mehmet-kozan/pdf-parse fork (v2.4.5+) uses a PDFParse class
-    // but also tries to maintain some compatibility with the original function API.
     if (typeof pdf === 'function') {
-      console.log('extractPDFText: using function API')
       const data = await pdf(buffer)
       text = data.text || ''
     } else if (pdf && pdf.PDFParse) {
-      console.log('extractPDFText: using PDFParse class API')
       const parser = new pdf.PDFParse({ data: new Uint8Array(buffer), verbosity: 0 })
       const data = await parser.getText()
       text = data.text || ''
-      console.log('extractPDFText: destroying parser')
       await parser.destroy().catch(() => {})
     } else if (pdf && typeof pdf.default === 'function') {
-      console.log('extractPDFText: using .default function API')
       const data = await pdf.default(buffer)
       text = data.text || ''
     } else {
       const keys = pdf ? Object.keys(pdf) : []
-      console.error('extractPDFText: unsupported API. Keys:', keys)
       throw new Error(`Unsupported pdf-parse API. Available keys: ${keys.join(', ')}`)
     }
 
-    console.log(`extractPDFText: finished. Extracted ${text.length} chars.`)
-    return text
+    return text.substring(0, MAX_TEXT_LENGTH)
   } catch (err) {
-    console.error('extractPDFText error details:', err)
     const message = err instanceof Error ? err.message : 'Unknown error'
     throw new Error(`Failed to extract text from PDF: ${message}`)
   }
 }
 
-/**
- * Process uploaded file content based on its type
- */
 async function processFile(file: File): Promise<{
   content: string
   fileType: string
@@ -88,26 +86,31 @@ async function processFile(file: File): Promise<{
   const fileName = file.name.toLowerCase()
   const fileSize = file.size
   const ext = fileName.split('.').pop() || 'unknown'
+
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    throw new Error(`File type .${ext} is not allowed.`)
+  }
+
+  if (fileSize > MAX_FILE_SIZE_BYTES) {
+    throw new Error(`File too large. Maximum size is ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB.`)
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer())
 
   let content = ''
   let extractionMethod = ''
 
   if (ext === 'pdf') {
-    // Extract text from PDF
     extractionMethod = 'pdf-parse (text extraction)'
     content = await extractPDFText(buffer)
-    
-    // If PDF text extraction yields very little, note it
+
     if (content.trim().length < 50) {
-      extractionMethod += ' - ⚠️ Minimal text extracted (PDF may be scan/image-based)'
+      extractionMethod += ' - Minimal text extracted (PDF may be scan/image-based)'
     }
   } else if (['txt', 'md', 'csv', 'json', 'html', 'xml', 'yaml', 'yml', 'log'].includes(ext)) {
-    // Read as UTF-8 text
     extractionMethod = 'direct UTF-8 read'
     content = buffer.toString('utf-8')
   } else {
-    // Fallback: try text
     extractionMethod = 'fallback UTF-8 read'
     content = buffer.toString('utf-8')
   }
@@ -123,47 +126,66 @@ async function processFile(file: File): Promise<{
     extractionMethod,
     extractedTextLength,
     wordCount: words,
-    lineCount: lines
+    lineCount: lines,
   }
 }
 
 export async function GET() {
   return NextResponse.json({
     status: 'ok',
-    env: {
-      hasPineconeKey: !!process.env.PINECONE_API_KEY,
-      pineconeIndex: process.env.PINECONE_INDEX,
-      nodeVersion: process.version
+    limits: {
+      maxFileSizeMB: MAX_FILE_SIZE_BYTES / 1024 / 1024,
+      maxTextLength: MAX_TEXT_LENGTH,
+      allowedExtensions: ALLOWED_EXTENSIONS,
     }
   })
 }
 
 export async function POST(request: NextRequest) {
-  console.log('--- Incoming Upload Request ---')
-  if (!process.env.PINECONE_API_KEY) {
-    console.error('CRITICAL: PINECONE_API_KEY is missing from environment variables!')
+  const ip = getClientIP(request)
+  const acquireKey = `upload:${ip}`
+
+  if (!uploadConcurrentLimiter.tryAcquire(acquireKey)) {
+    return NextResponse.json(
+      {
+        error: 'Too Many Concurrent Uploads',
+        message: 'Please wait for current uploads to complete.',
+      },
+      { status: 429 }
+    )
   }
 
   try {
     const contentType = request.headers.get('content-type') || ''
-    console.log(`Content-Type: ${contentType}`)
 
     if (!contentType.includes('multipart/form-data') && !contentType.includes('application/json')) {
-      console.warn(`Unexpected content type: ${contentType}`)
+      uploadConcurrentLimiter.release(acquireKey)
+      return NextResponse.json(
+        { error: 'Invalid Content-Type. Use multipart/form-data or application/json.' },
+        { status: 400 }
+      )
     }
 
     const formData = await request.formData()
-    console.log('FormData parsed successfully.')
     const file = formData.get('file') as File | null
     let title = formData.get('title') as string || ''
     const source = formData.get('source') as string || 'manual-upload'
     const category = formData.get('category') as string || 'general'
     const text = formData.get('text') as string | null
 
-    console.log(`Request type: ${file ? 'File (' + file.name + ')' : 'Text'}`)
+    const metaParsed = UploadMetaSchema.safeParse({ title, source, category, text: text || undefined })
+    if (!metaParsed.success) {
+      uploadConcurrentLimiter.release(acquireKey)
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          details: metaParsed.error.flatten().fieldErrors,
+        },
+        { status: 400 }
+      )
+    }
 
-    // Process file upload or pasted text
-    let content = text || ''
+    let content = metaParsed.data.text || ''
     let fileType = 'text'
     let fileSize = 0
     let extractionMethod = 'direct-input'
@@ -171,7 +193,6 @@ export async function POST(request: NextRequest) {
     let lineCount = 0
 
     if (file) {
-      console.log(`Processing file: ${file.name}, size: ${file.size}, type: ${file.type}`)
       try {
         const processed = await processFile(file)
         content = processed.content
@@ -180,21 +201,23 @@ export async function POST(request: NextRequest) {
         extractionMethod = processed.extractionMethod
         wordCount = processed.wordCount
         lineCount = processed.lineCount
-        console.log(`File processed successfully. Extracted ${content.length} chars.`)
       } catch (procErr) {
-        console.error('Error during processFile:', procErr)
-        throw procErr
+        uploadConcurrentLimiter.release(acquireKey)
+        const msg = procErr instanceof Error ? procErr.message : 'Upload processing failed'
+        return NextResponse.json({ error: msg }, { status: 400 })
       }
 
-      if (!title || title === 'Untitled Document') {
-        title = file.name.replace(/\.[^/.]+$/, '') // Remove extension
+      if (!metaParsed.data.title || metaParsed.data.title === 'Untitled Document') {
+        title = file.name.replace(/\.[^/.]+$/, '')
+      } else {
+        title = metaParsed.data.title
       }
-    } else if (text) {
-      // Pasted text processing
-      wordCount = text.trim() ? text.trim().split(/\s+/).length : 0
-      lineCount = text ? text.split('\n').length : 0
-      fileSize = text.length
+    } else if (metaParsed.data.text) {
+      wordCount = metaParsed.data.text.trim() ? metaParsed.data.text.trim().split(/\s+/).length : 0
+      lineCount = metaParsed.data.text ? metaParsed.data.text.split('\n').length : 0
+      fileSize = metaParsed.data.text.length
       extractionMethod = 'pasted-text'
+      title = metaParsed.data.title || title
     }
 
     if (!title) {
@@ -202,45 +225,44 @@ export async function POST(request: NextRequest) {
     }
 
     if (!content || content.trim().length === 0) {
-      console.warn('No content provided in request.')
+      uploadConcurrentLimiter.release(acquireKey)
       return NextResponse.json(
         { error: 'No content provided. Upload a file or paste text.' },
         { status: 400 }
       )
     }
 
-    // Generate a unique ID
     let id: string;
     try {
       id = crypto.randomUUID()
     } catch (e) {
-      console.warn('crypto.randomUUID failed, falling back to manual UUID generation')
       id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
         var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
       });
     }
-    console.log(`Generated ID: ${id}`)
 
-    // Upload to Pinecone
-    console.log('Upserting to Pinecone...')
     try {
       await upsertToPinecone({
         id,
         title,
         text: content,
-        source,
-        category,
+        source: metaParsed.data.source || source,
+        category: metaParsed.data.category || category,
         fileType,
         wordCount,
         extractionMethod
       })
-      console.log('Pinecone upsert complete.')
     } catch (pineconeErr) {
+      uploadConcurrentLimiter.release(acquireKey)
       console.error('Pinecone Error:', pineconeErr)
-      throw pineconeErr
+      return NextResponse.json(
+        { error: 'Failed to index document. Please try again later.' },
+        { status: 500 }
+      )
     }
 
+    uploadConcurrentLimiter.release(acquireKey)
     return NextResponse.json({
       success: true,
       message: 'Document uploaded successfully',
@@ -253,23 +275,13 @@ export async function POST(request: NextRequest) {
       lineCount,
       extractionMethod,
       timestamp: new Date().toISOString(),
-      details: {
-        rawFileSize: fileSize > 0 ? `${(fileSize / 1024).toFixed(1)} KB` : 'N/A',
-        extractedTextLength: `${content.length} characters`,
-        wordCount: `${wordCount} words`,
-        lineCount: `${lineCount} lines`,
-        extractionMethod,
-        storage: 'Pinecone Index (384-dim vector)'
-      }
     })
   } catch (error) {
-    console.error('CRITICAL UPLOAD ERROR:', error)
+    uploadConcurrentLimiter.release(acquireKey)
+    console.error('UPLOAD ERROR:', error)
+    const msg = error instanceof Error ? error.message : 'Upload failed'
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'Upload failed',
-        stack: error instanceof Error ? error.stack : undefined,
-        cause: error instanceof Error ? (error as any).cause : undefined
-      },
+      { error: msg },
       { status: 500 }
     )
   }

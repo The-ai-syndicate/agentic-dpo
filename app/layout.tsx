@@ -49,7 +49,7 @@ export const metadata: Metadata = {
     title: "Agentic DPO | Botswana Data Protection Act AI Assistant",
     description:
       "Chat with an AI expert on Botswana's Data Protection Act (DPA). Understand your data privacy rights, compliance obligations, breach procedures, and how the DPA protects you. Built by Obokeng Makwati.",
-    url: "https://agenticdpo.com",
+    url: "https://agenticdpo.cloud",
     countryName: "Botswana",
   },
   twitter: {
@@ -71,9 +71,9 @@ export const metadata: Metadata = {
     },
   },
   alternates: {
-    canonical: "https://agenticdpo.com",
+    canonical: "https://agenticdpo.cloud",
     languages: {
-      "en-BW": "https://agenticdpo.com",
+      "en-BW": "https://agenticdpo.cloud",
     },
   },
   category: "technology",
@@ -130,7 +130,7 @@ export default function RootLayout({
                   name: "Agentic DPO",
                   description:
                     "AI assistant specialised in the Botswana Data Protection Act. Built by Obokeng Makwati.",
-                  url: "https://agenticdpo.com",
+                  url: "https://agenticdpo.cloud",
                   founder: {
                     "@type": "Person",
                     name: "Obokeng Makwati",
@@ -144,7 +144,7 @@ export default function RootLayout({
                 {
                   "@type": "WebApplication",
                   name: "Agentic DPO",
-                  url: "https://agenticdpo.com",
+                  url: "https://agenticdpo.cloud",
                   description:
                     "Conversational AI chatbot that answers questions about Botswana's Data Protection Act (DPA), data privacy rights, and compliance.",
                   applicationCategory: "EducationalApplication",
@@ -207,7 +207,7 @@ export default function RootLayout({
                 {
                   "@type": "WebSite",
                   name: "Agentic DPO",
-                  url: "https://agenticdpo.com",
+                  url: "https://agenticdpo.cloud",
                   about: {
                     "@type": "Thing",
                     name: "Botswana Data Protection Act",

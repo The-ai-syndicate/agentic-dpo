@@ -225,7 +225,7 @@ Deployment:
 | JSON-LD | Organization, WebApplication, FAQPage (5 Q&As), WebSite |
 | Breadcrumb | BreadcrumbList schema |
 | Robots | index, follow with full snippets |
-| Canonical | https://agenticdpo.com |
+| Canonical | https://agenticdpo.cloud |
 | Geo Tags | geo.region: BW, geo.placename: Botswana |
 
 ## Security Considerations

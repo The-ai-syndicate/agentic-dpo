@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next"
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const siteUrl = "https://agenticdpo.com"
+  const siteUrl = "https://agenticdpo.cloud"
 
   return [
     {

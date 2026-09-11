@@ -34,7 +34,7 @@
 | JSON-LD WebSite | ✅ | About Botswana DPA |
 | Breadcrumb Schema | ✅ | Botswana DPA breadcrumb |
 | Geo Tags | ✅ | geo.region: BW |
-| Canonical URL | ✅ | https://agenticdpo.com |
+| Canonical URL | ✅ | https://agenticdpo.cloud |
 | Robots | ✅ | index, follow |
 
 ### Credit Attribution

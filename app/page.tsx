@@ -16,7 +16,7 @@ export default function Home() {
                 "@type": "ListItem",
                 "position": 1,
                 "name": "Botswana Data Protection Act",
-                "item": "https://agenticdpo.com"
+                "item": "https://agenticdpo.cloud"
               }
             ]
           }
