@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRequire } from 'module'
-import { generateSimpleEmbedding } from '@/lib/embeddings'
 import { upsertToPinecone } from '@/lib/pinecone'
 import { uploadConcurrentLimiter, getClientIP } from '@/lib/rate-limit'
 import { z } from 'zod'

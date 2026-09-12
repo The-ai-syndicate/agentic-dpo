@@ -1,4 +1,4 @@
-import { generateSimpleEmbedding } from './embeddings'
+import { generateEmbedding, generateEmbeddings, EMBEDDING_DIMENSION } from './embeddings'
 
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY
 const PINECONE_INDEX = process.env.PINECONE_INDEX || 'knowledge-base'
@@ -83,11 +83,13 @@ export async function upsertToPinecone(doc: {
   const chunks = chunkText(doc.text)
   console.log(`upsertToPinecone: Splitting document into ${chunks.length} chunks.`)
 
+  // Embed all chunks in a single batch request (semantic model).
+  const embeddings = await generateEmbeddings(chunks)
+
   const vectors = chunks.map((chunk, i) => {
-    const embedding = generateSimpleEmbedding(chunk)
     return {
       id: chunks.length === 1 ? doc.id : `${doc.id}#chunk-${i}`,
-      values: embedding,
+      values: embeddings[i],
       metadata: {
         title: doc.title,
         text: chunk,
@@ -128,7 +130,7 @@ export async function upsertToPinecone(doc: {
 export async function searchPinecone(query: string, limit: number = 5) {
   try {
     const host = await getIndexHost()
-    const vector = generateSimpleEmbedding(query)
+    const vector = await generateEmbedding(query)
 
     const response = await fetch(`https://${host}/query`, {
       method: 'POST',
