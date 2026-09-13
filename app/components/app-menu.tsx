@@ -26,7 +26,6 @@ import {
   Scale,
   Sparkles,
   X,
-  UploadCloud,
   Plus,
 } from 'lucide-react'
 
@@ -42,7 +41,6 @@ interface NavItem {
 const primaryNav: NavItem[] = [
   { label: 'New chat', href: '/', icon: Plus, action: 'new-chat', description: 'Start a fresh conversation' },
   { label: 'Home', href: '/', icon: Home, description: 'Back to chat' },
-  { label: 'Upload Documents', href: '/upload', icon: UploadCloud, description: 'Add files to the knowledge base' },
   { label: 'About', href: '/about', icon: Info, description: 'About Agentic DPO' },
   { label: 'DPA Guide', href: '/guide', icon: BookOpen, description: 'Botswana DPA overview' },
 ]
