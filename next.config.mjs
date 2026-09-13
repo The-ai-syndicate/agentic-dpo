@@ -45,6 +45,34 @@ const nextConfig = {
       bodySizeLimit: '5mb',
     },
   },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      // These packages are loaded dynamically at runtime (via createRequire /
+      // require.resolve in lib/ingestion/extractors.ts and the embedding stack).
+      // Marking them external stops webpack from statically tracing the dynamic
+      // requires, which otherwise emits "Critical dependency: the request of a
+      // dependency is an expression" warnings during `next build`.
+      config.externals = config.externals || []
+      config.externals.push('pdf-parse', 'mammoth')
+
+      // pdf-parse / mammoth are loaded through an opaque `require` obtained via
+      // `eval('require')` (lib/ingestion/extractors.ts and app/api/upload/route.ts)
+      // so the bundler cannot statically analyse the call. That is intentional and
+      // safe — the packages are marked external above and only ever run at runtime
+      // on the Node server. Webpack still emits a harmless "Critical dependency:
+      // require function is used in a way in which dependencies cannot be
+      // statically extracted" warning; silence it for just those two modules.
+      config.ignoreWarnings = [
+        ...(config.ignoreWarnings || []),
+        (warning) =>
+          typeof warning?.message === 'string' &&
+          warning.message.includes(
+            'Critical dependency: require function is used in a way in which dependencies cannot be statically extracted'
+          ),
+      ]
+    }
+    return config
+  },
   async headers() {
     return [
       {

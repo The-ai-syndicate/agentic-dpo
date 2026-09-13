@@ -1,7 +1,72 @@
-import { createRequire } from 'module'
 import type { Section } from './types'
 
-const require = createRequire(import.meta.url)
+/**
+ * Opaque Node `require`, obtained via `eval` and resolved LAZILY.
+ *
+ * Webpack flags any `require()` whose argument is not a string literal (and any
+ * use of `createRequire().resolve`) with a "Critical dependency" warning. We
+ * must load pdf-parse / mammoth dynamically (pdf-parse v2 has a strict `exports`
+ * map that blocks deep subpath requires; mammoth is optional), so we grab the
+ * real Node `require` through `eval` — invisible to the bundler.
+ *
+ * Resolution is deferred to first use: during `next build`'s page-data
+ * collection webpack evaluates this module in an ESM scope where neither `eval`
+ * nor a top-level `require` is guaranteed, so we must not touch `require` at
+ * module-eval time. `createRequire` is imported dynamically as a last resort.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedRequire: NodeRequire | null = null
+
+function getRequire(): NodeRequire {
+  if (cachedRequire) return cachedRequire
+
+  // 1. The genuine CommonJS require, if we're running in a CJS-ish context.
+  try {
+    // eslint-disable-next-line no-eval
+    const r = (0, eval)('require') as NodeRequire
+    if (typeof r === 'function') {
+      cachedRequire = r
+      return r
+    }
+  } catch {
+    /* not available (e.g. pure ESM) — fall through */
+  }
+
+  // 2. Fallback: build a require bound to this module's URL. Referenced
+  //    dynamically so webpack never statically links `createRequire().resolve`.
+  //    Prefer `process.getBuiltinModule` (Node >=20.16, no global require
+  //    needed); otherwise reach `node:module` through the CJS require.
+  type CreateRequire = (p: string) => NodeRequire
+  let createRequireFn: CreateRequire | undefined
+
+  const getBuiltin = (process as unknown as {
+    getBuiltinModule?: (id: string) => { createRequire: CreateRequire }
+  }).getBuiltinModule
+  if (typeof getBuiltin === 'function') {
+    createRequireFn = getBuiltin.call(process, 'node:module')?.createRequire
+  }
+  if (!createRequireFn) {
+    // eslint-disable-next-line no-eval
+    const mod = (0, eval)('require')('node:module') as { createRequire: CreateRequire }
+    createRequireFn = mod.createRequire
+  }
+
+  const r = createRequireFn(import.meta.url)
+  cachedRequire = r
+  return r
+}
+
+/** Opaque `require.resolve` (reached via the lazily-resolved `require`). */
+type SafeResolve = (request: string, options?: { paths?: string[] }) => string
+function safeResolve(request: string, options?: { paths?: string[] }): string {
+  const req = getRequire() as unknown as Record<string, SafeResolve>
+  return req['resolve'](request, options)
+}
+
+/** Opaque require call (lazily resolved). */
+function safeRequire(request: string): unknown {
+  return getRequire()(request)
+}
 
 /** Extensions we accept. */
 export const ALLOWED_EXTENSIONS = [
@@ -107,16 +172,16 @@ function loadPdfParse(): any {
   const attempts: Array<() => any> = [
     // 1. Resolve the package entry to an absolute path, then require it.
     () => {
-      const abs = require.resolve('pdf-parse', { paths: [process.cwd()] })
-      return require(abs)
+      const abs = safeResolve('pdf-parse', { paths: [process.cwd()] })
+      return safeRequire(abs)
     },
     // 2. Same, but resolved relative to this module's location.
     () => {
-      const abs = require.resolve('pdf-parse')
-      return require(abs)
+      const abs = safeResolve('pdf-parse')
+      return safeRequire(abs)
     },
     // 3. Bare specifier (works in raw Node / when externalised correctly).
-    () => require('pdf-parse'),
+    () => safeRequire('pdf-parse'),
   ]
 
   for (const attempt of attempts) {
@@ -175,8 +240,7 @@ async function extractDocx(buffer: Buffer): Promise<{ text: string; pageCount: n
   // Loaded via an indirect specifier so the bundler can't statically resolve it
   // (avoids a "Can't resolve 'mammoth'" build warning when it isn't installed).
   try {
-    const mammothName = ['mammoth'].join('')
-    const mammoth = require(mammothName)
+    const mammoth = safeRequire('mammoth')
     const result = await mammoth.convertToHtml({ buffer })
     const html: string = result.value || ''
     // Convert <hN>...</hN> to HEADING markers so we can split by heading level.
@@ -196,7 +260,7 @@ async function extractDocx(buffer: Buffer): Promise<{ text: string; pageCount: n
     return { text, pageCount: 0 }
   } catch {
     // Crude fallback: unzip word/document.xml and strip tags.
-    const zlib = require('zlib')
+    const zlib = safeRequire('zlib')
     let xml = ''
     try {
       xml = extractDocxXml(buffer, zlib)
@@ -218,7 +282,7 @@ async function extractDocx(buffer: Buffer): Promise<{ text: string; pageCount: n
 /** Minimal ZIP entry reader for word/document.xml (no external deps). */
 function extractDocxXml(buffer: Buffer, _zlib: unknown): string {
   // Locate the central directory entry for word/document.xml and inflate it.
-  const { inflateRawSync } = require('zlib')
+  const { inflateRawSync } = safeRequire('zlib')
   const sig = Buffer.from([0x50, 0x4b, 0x01, 0x02]) // central dir header
   let idx = 0
   while (idx >= 0) {

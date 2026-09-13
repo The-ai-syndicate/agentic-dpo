@@ -250,6 +250,13 @@ export function ChatInterface() {
     initSession(uuidv4())
   }, [sessionId, initSession])
 
+  // Listen for "new chat" requests dispatched from the nav menu
+  useEffect(() => {
+    const handleNewChat = () => startNewChat()
+    window.addEventListener('new-chat', handleNewChat)
+    return () => window.removeEventListener('new-chat', handleNewChat)
+  }, [startNewChat])
+
   // Keep messagesRef in sync with messages state
   useEffect(() => {
     messagesRef.current = messages

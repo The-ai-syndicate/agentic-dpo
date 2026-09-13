@@ -1,10 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createRequire } from 'module'
 import { upsertToPinecone } from '@/lib/pinecone'
 import { uploadConcurrentLimiter, getClientIP } from '@/lib/rate-limit'
 import { z } from 'zod'
 
-const require = createRequire(import.meta.url)
+// Opaque require (obtained lazily via eval) that webpack cannot statically
+// analyse — avoids "Critical dependency" build warnings when loading pdf-parse
+// by a runtime path. Resolution is deferred so `next build`'s page-data
+// collection (which evaluates this module in an ESM scope) never touches
+// `require`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedRequire: NodeRequire | null = null
+function getRequire(): NodeRequire {
+  if (cachedRequire) return cachedRequire
+  try {
+    // eslint-disable-next-line no-eval
+    const r = (0, eval)('require') as NodeRequire
+    if (typeof r === 'function') {
+      cachedRequire = r
+      return r
+    }
+  } catch {
+    /* fall through */
+  }
+  const getBuiltin = (process as unknown as {
+    getBuiltinModule?: (id: string) => { createRequire: (p: string) => NodeRequire }
+  }).getBuiltinModule
+  const createRequireFn = getBuiltin?.call(process, 'node:module')?.createRequire
+  if (!createRequireFn) throw new Error('Could not resolve require for pdf-parse.')
+  const r = createRequireFn(import.meta.url)
+  cachedRequire = r
+  return r
+}
+function safeRequire(request: string): unknown {
+  return getRequire()(request)
+}
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 const MAX_TEXT_LENGTH = 500000
@@ -34,7 +63,7 @@ async function extractPDFText(buffer: Buffer): Promise<string> {
     for (const path of searchPaths) {
       try {
         console.log(`extractPDFText: trying require('${path}')`)
-        pdf = require(path)
+        pdf = safeRequire(path)
         if (pdf) {
           console.log(`extractPDFText: successfully loaded from ${path}`)
           break

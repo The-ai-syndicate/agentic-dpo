@@ -2,6 +2,17 @@
   "name": "my-v0-project",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "protobufjs",
+      "sharp",
+      "@xenova/transformers",
+      "onnxruntime-node",
+      "unrs-resolver"
+    ]
+  },
   "scripts": {
     "build": "next build",
     "build:with-model": "npm run download-model && next build",

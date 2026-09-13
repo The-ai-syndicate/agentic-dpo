@@ -27,6 +27,7 @@ import {
   Sparkles,
   X,
   UploadCloud,
+  Plus,
 } from 'lucide-react'
 
 interface NavItem {
@@ -35,9 +36,11 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>
   external?: boolean
   description?: string
+  action?: 'new-chat'
 }
 
 const primaryNav: NavItem[] = [
+  { label: 'New chat', href: '/', icon: Plus, action: 'new-chat', description: 'Start a fresh conversation' },
   { label: 'Home', href: '/', icon: Home, description: 'Back to chat' },
   { label: 'Upload Documents', href: '/upload', icon: UploadCloud, description: 'Add files to the knowledge base' },
   { label: 'About', href: '/about', icon: Info, description: 'About Agentic DPO' },
@@ -148,7 +151,16 @@ export function AppMenu() {
           return (
             <li key={item.label}>
               <SheetClose asChild>
-                <Link href={item.href} className={`${baseCls} ${active ? 'bg-white/[0.04]' : ''}`}>
+                <Link
+                  href={item.href}
+                  className={`${baseCls} ${active ? 'bg-white/[0.04]' : ''}`}
+                  onClick={() => {
+                    if (item.action === 'new-chat') {
+                      // Notify the chat interface to reset to a fresh conversation.
+                      window.dispatchEvent(new CustomEvent('new-chat'))
+                    }
+                  }}
+                >
                   {content}
                 </Link>
               </SheetClose>
