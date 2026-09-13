@@ -4,6 +4,12 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "pnpm": {
+    "overrides": {
+      "sharp": "0.34.5"
+    },
+    "ignoredBuiltDependencies": [
+      "sharp"
+    ],
     "onlyBuiltDependencies": [
       "esbuild",
       "protobufjs",
@@ -11,6 +17,9 @@
       "onnxruntime-node",
       "unrs-resolver"
     ]
+  },
+  "overrides": {
+    "sharp": "0.34.5"
   },
   "scripts": {
     "build": "next build",
