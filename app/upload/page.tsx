@@ -303,11 +303,15 @@ export default function UploadPage() {
         }
 
         if (data.duplicate) {
+          // If the server started a fresh (retry) job, track it as processing.
+          // Otherwise the file is already indexed — show it as done.
+          const isRetry = data.retried === true && !!data.jobId
           patchCard(card.localId, {
-            status: data.jobId ? 'queued' : 'done',
+            status: isRetry ? 'queued' : 'done',
             duplicate: true,
             documentId: data.documentId,
             jobId: data.jobId ?? undefined,
+            retryable: !!data.jobId,
             errorMsg: data.message || 'Already uploaded',
           })
           if (data.jobId) subscribe(card.localId, data.jobId)

@@ -12,6 +12,7 @@ import {
   createDocument,
   createJob,
   getActiveJobForDocument,
+  getLatestJobForDocument,
 } from '@/lib/ingestion/document-service'
 import { ingestionQueue, recoverInterruptedJobs } from '@/lib/ingestion/worker'
 
@@ -86,13 +87,54 @@ export async function POST(request: NextRequest) {
     // -------- Idempotency: same SHA-256 for this user → existing doc --------
     const existing = await findDocumentByHash(userId, fileHash)
     if (existing) {
+      // Case A: a job is still in flight → report it as a duplicate.
       const activeJob = await getActiveJobForDocument(existing.id)
+      if (activeJob) {
+        const res = NextResponse.json(
+          {
+            duplicate: true,
+            retried: false,
+            documentId: existing.id,
+            jobId: activeJob.id,
+            filename: existing.filename,
+            status: activeJob.status,
+            message: 'This file is already being processed.',
+          },
+          { status: 200 }
+        )
+        return attachUserCookie(res, userId, isNew)
+      }
+
+      // Case B: the last attempt failed/cancelled (or never completed) →
+      // retry instead of leaving the user at a dead "already uploaded" end.
+      const latest = await getLatestJobForDocument(existing.id)
+      if (!latest || latest.status === 'failed' || latest.status === 'cancelled') {
+        const retryJob = await createJob(existing.id)
+        ingestionQueue.enqueue(retryJob.id)
+        const res = NextResponse.json(
+          {
+            duplicate: true,
+            retried: true,
+            documentId: existing.id,
+            jobId: retryJob.id,
+            filename: existing.filename,
+            status: retryJob.status,
+            message: 'Retrying this file.',
+          },
+          { status: 202 }
+        )
+        return attachUserCookie(res, userId, isNew)
+      }
+
+      // Case C: already completed successfully → genuine duplicate, nothing to do.
       const res = NextResponse.json(
         {
           duplicate: true,
+          retried: false,
           documentId: existing.id,
-          jobId: activeJob?.id ?? null,
+          jobId: latest.id,
           filename: existing.filename,
+          status: latest.status,
           message: 'This file has already been uploaded.',
         },
         { status: 200 }

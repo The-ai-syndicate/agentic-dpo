@@ -93,21 +93,47 @@ function splitByPage(text: string): Section[] {
 /*  Extractors                                                                 */
 /* -------------------------------------------------------------------------- */
 
-async function extractPdf(buffer: Buffer): Promise<{ text: string; pageCount: number }> {
-  let pdf: any
-  const searchPaths = [
-    'pdf-parse',
-    'pdf-parse/lib/pdf-parse.js',
-    'pdf-parse/dist/pdf-parse/cjs/index.cjs',
+/**
+ * Load the pdf-parse module in a bundler-proof way.
+ *
+ * pdf-parse v2 is an ESM-first package with a strict `exports` map that blocks
+ * deep subpath requires, and Next.js/webpack rewrites plain `require('pdf-parse')`
+ * calls inside server chunks. To stay reliable in BOTH `tsx` (raw Node) and the
+ * compiled Next.js server, we resolve the package's real entry file to an
+ * ABSOLUTE path via `require.resolve` (against the project cwd + this module),
+ * then `require()` that absolute file — which webpack cannot statically analyse.
+ */
+function loadPdfParse(): any {
+  const attempts: Array<() => any> = [
+    // 1. Resolve the package entry to an absolute path, then require it.
+    () => {
+      const abs = require.resolve('pdf-parse', { paths: [process.cwd()] })
+      return require(abs)
+    },
+    // 2. Same, but resolved relative to this module's location.
+    () => {
+      const abs = require.resolve('pdf-parse')
+      return require(abs)
+    },
+    // 3. Bare specifier (works in raw Node / when externalised correctly).
+    () => require('pdf-parse'),
   ]
-  for (const p of searchPaths) {
+
+  for (const attempt of attempts) {
     try {
-      pdf = require(p)
-      if (pdf) break
+      const mod = attempt()
+      if (mod && (mod.PDFParse || typeof mod === 'function' || typeof mod.default === 'function')) {
+        return mod
+      }
     } catch {
-      /* try next */
+      /* try next strategy */
     }
   }
+  return null
+}
+
+async function extractPdf(buffer: Buffer): Promise<{ text: string; pageCount: number }> {
+  const pdf = loadPdfParse()
   if (!pdf) throw new Error('Could not load pdf-parse.')
 
   let text = ''

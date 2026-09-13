@@ -177,6 +177,25 @@ export async function getActiveJobForDocument(
   return (data as JobRow) || null
 }
 
+/**
+ * Most recent job for a document, regardless of status. Used to decide whether
+ * a re-upload of identical content should be re-processed (retry) or reported
+ * as an in-flight duplicate.
+ */
+export async function getLatestJobForDocument(
+  documentId: string
+): Promise<JobRow | null> {
+  const { data, error } = await supabase
+    .from('jobs')
+    .select('*')
+    .eq('document_id', documentId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`getLatestJobForDocument failed: ${error.message}`)
+  return (data as JobRow) || null
+}
+
 export async function updateJob(
   jobId: string,
   patch: Partial<{
