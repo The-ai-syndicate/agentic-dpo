@@ -189,7 +189,7 @@ async function main() {
     const chunks = chunkText(fullText)
     console.log(`   "${doc.title}": ${fullText.length} chars -> ${chunks.length} chunks`)
 
-    const embeddings = await generateEmbeddings(chunks)
+    const embeddings = await generateEmbeddings(chunks, { inputType: 'document' })
     const baseId = `${doc.meta.title || 'doc'}`
       .replace(/[^a-zA-Z0-9]+/g, '-')
       .toLowerCase()

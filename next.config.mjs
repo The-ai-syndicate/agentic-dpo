@@ -1,12 +1,26 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
+    // WARNING: build errors are currently ignored. This lets type errors ship to
+    // production. Remove this (or set to false) once the codebase type-checks
+    // cleanly, so `next build` fails on real type regressions.
     ignoreBuildErrors: true,
   },
   images: {
     unoptimized: true,
   },
   transpilePackages: ['recharts'],
+  // The local embedding stack (@xenova/transformers + onnxruntime-node) loads
+  // native binaries (.node) and model files at runtime. Keep them external to
+  // the server bundle and ensure they ship with the serverless functions.
+  serverExternalPackages: ['@xenova/transformers', 'onnxruntime-node', 'sharp'],
+  outputFileTracingIncludes: {
+    '/api/chat': [
+      './node_modules/@xenova/transformers/**/*',
+      './node_modules/onnxruntime-node/**/*',
+      './models/**/*',
+    ],
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: '5mb',

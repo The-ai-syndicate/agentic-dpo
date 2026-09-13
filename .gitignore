@@ -30,3 +30,6 @@ next-env.d.ts
 devserver.log
 *.log
 undefined
+
+# locally-downloaded embedding model (regenerate with `npm run download-model`)
+/models

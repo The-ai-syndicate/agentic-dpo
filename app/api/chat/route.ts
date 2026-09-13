@@ -5,6 +5,13 @@ import { supabase, initializeDatabase } from '@/lib/supabase'
 import { chatConcurrentLimiter, getClientIP } from '@/lib/rate-limit'
 import { z } from 'zod'
 
+// The local embedding model (@xenova/transformers + onnxruntime-node) requires
+// the Node.js runtime — it cannot run on the Edge runtime. Cold starts also
+// need time to load the model, hence the generous maxDuration.
+export const runtime = 'nodejs'
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 const MAX_USER_MESSAGE_LENGTH = 8000
 const MAX_MESSAGES_HISTORY = 50
 const MAX_CONTEXT_CHARS = 200000
@@ -97,12 +104,56 @@ export async function POST(request: NextRequest) {
     // Responses are generated ONLY from this context (strict RAG grounding).
     let context = ''
     let sources: string[] = []
+    let retrievalError: string | null = null
     try {
       const grounded = await getGroundedContext(userMessage, 5)
       context = grounded.context
       sources = grounded.sources
+      retrievalError = grounded.retrievalError
     } catch (error) {
-      console.error('Pinecone search failed:', error)
+      // getGroundedContext normally does not throw, but guard anyway.
+      retrievalError = error instanceof Error ? error.message : String(error)
+      console.error('Pinecone search failed:', retrievalError)
+    }
+
+    // Distinguish an INFRASTRUCTURE failure (embedding model / Pinecone down)
+    // from a genuinely EMPTY knowledge base. The former must surface as an
+    // error — never as "I couldn't find anything…".
+    if (retrievalError && !context) {
+      chatConcurrentLimiter.release(acquireKey)
+      const RETRIEVAL_ERROR_MESSAGE =
+        'I’m having trouble reaching my knowledge base right now, so I can’t ' +
+        'give you a reliable answer. Please try again in a moment. 🙏'
+
+      if (wantsStream) {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ content: RETRIEVAL_ERROR_MESSAGE })}\n\n`)
+            )
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+            controller.close()
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        })
+      }
+
+      return new Response(
+        JSON.stringify({
+          error: 'Retrieval unavailable',
+          message: RETRIEVAL_ERROR_MESSAGE,
+          detail: process.env.NODE_ENV !== 'production' ? retrievalError : undefined,
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      )
     }
 
     // If the knowledge base has no relevant data, refuse instead of hallucinating.

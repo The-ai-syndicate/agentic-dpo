@@ -84,7 +84,9 @@ export async function upsertToPinecone(doc: {
   console.log(`upsertToPinecone: Splitting document into ${chunks.length} chunks.`)
 
   // Embed all chunks in a single batch request (semantic model).
-  const embeddings = await generateEmbeddings(chunks)
+  // `inputType: 'document'` is important for Voyage — stored documents are
+  // embedded differently from search queries to improve retrieval.
+  const embeddings = await generateEmbeddings(chunks, { inputType: 'document' })
 
   const vectors = chunks.map((chunk, i) => {
     return {
@@ -128,40 +130,38 @@ export async function upsertToPinecone(doc: {
 }
 
 export async function searchPinecone(query: string, limit: number = 5) {
-  try {
-    const host = await getIndexHost()
-    const vector = await generateEmbedding(query)
+  // NOTE: errors here are intentionally NOT swallowed. A failure to embed the
+  // query or reach Pinecone is an infrastructure error, not an empty result.
+  // Swallowing it (the old behaviour) caused production to silently answer
+  // "I couldn't find anything…" whenever the embedding model failed to load.
+  const host = await getIndexHost()
+  const vector = await generateEmbedding(query)
 
-    const response = await fetch(`https://${host}/query`, {
-      method: 'POST',
-      headers: {
-        'Api-Key': PINECONE_API_KEY!,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        vector: vector,
-        topK: limit,
-        includeMetadata: true
-      })
+  const response = await fetch(`https://${host}/query`, {
+    method: 'POST',
+    headers: {
+      'Api-Key': PINECONE_API_KEY!,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      vector: vector,
+      topK: limit,
+      includeMetadata: true
     })
+  })
 
-    if (!response.ok) {
-      const error = await response.text()
-      console.error(`Pinecone search failed: ${error}`)
-      return []
-    }
-
-    const data = await response.json()
-    // Map Pinecone response format to match what the chat API expects
-    return (data.matches || []).map((match: any) => ({
-      id: match.id,
-      score: match.score,
-      payload: match.metadata // Pinecone uses 'metadata' instead of 'payload'
-    }))
-  } catch (error) {
-    console.error('Pinecone search error:', error)
-    return []
+  if (!response.ok) {
+    const error = await response.text()
+    throw new Error(`Pinecone query failed (${response.status}): ${error}`)
   }
+
+  const data = await response.json()
+  // Map Pinecone response format to match what the chat API expects
+  return (data.matches || []).map((match: any) => ({
+    id: match.id,
+    score: match.score,
+    payload: match.metadata // Pinecone uses 'metadata' instead of 'payload'
+  }))
 }
 
 /**
@@ -177,13 +177,27 @@ export interface GroundedContext {
   bestScore: number
   matchCount: number
   raw: any[]
+  /**
+   * Set when retrieval itself failed (embedding model unavailable, Pinecone
+   * unreachable, etc.). When non-null, callers must treat this as an
+   * infrastructure error — NOT as "the knowledge base has no answer".
+   */
+  retrievalError: string | null
 }
 
 export async function getGroundedContext(
   query: string,
   limit: number = 5
 ): Promise<GroundedContext> {
-  const results = await searchPinecone(query, limit)
+  let results: any[] = []
+  let retrievalError: string | null = null
+
+  try {
+    results = await searchPinecone(query, limit)
+  } catch (error) {
+    retrievalError = error instanceof Error ? error.message : String(error)
+    console.error('🔴 Retrieval failed (embedding/Pinecone):', retrievalError)
+  }
 
   const usable = (results || []).filter(
     (r: any) =>
@@ -220,5 +234,6 @@ export async function getGroundedContext(
     bestScore: Number.isFinite(bestScore) ? bestScore : 0,
     matchCount: usable.length,
     raw: usable,
+    retrievalError,
   }
 }
