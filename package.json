@@ -7,7 +7,6 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "protobufjs",
-      "sharp",
       "@xenova/transformers",
       "onnxruntime-node",
       "unrs-resolver"

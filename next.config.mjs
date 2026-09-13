@@ -16,7 +16,6 @@ const nextConfig = {
   serverExternalPackages: [
     '@xenova/transformers',
     'onnxruntime-node',
-    'sharp',
     // Document ingestion only:
     //  - pdf-parse: PDF text extraction
     //  - mammoth: OPTIONAL nicer DOCX extraction (extractors.ts falls back to a
